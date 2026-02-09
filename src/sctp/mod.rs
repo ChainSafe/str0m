@@ -550,7 +550,8 @@ impl RtcSctp {
                 match assoc.open_stream(entry.id, PayloadProtocolIdentifier::Unknown) {
                     Ok(mut s) => {
                         if !entry.configure_reliability(&mut s) {
-                            continue;
+                            entry.set_state(StreamEntryState::Closed);
+                            return Some(SctpEvent::Close { id: entry.id });
                         }
 
                         let config = entry.config.as_ref().expect("config if AwaitOpen");
@@ -586,7 +587,8 @@ impl RtcSctp {
                                 entry.id
                             );
                             entry.do_close = true;
-                            continue;
+                            entry.set_state(StreamEntryState::Closed);
+                            return Some(SctpEvent::Close { id: entry.id });
                         }
 
                         // Continuing means we are opening the stream out-of-band. The error can happen
@@ -595,7 +597,8 @@ impl RtcSctp {
                     Err(e) => {
                         warn!("Opening stream {} failed: {:?}", entry.id, e);
                         entry.do_close = true;
-                        continue;
+                        entry.set_state(StreamEntryState::Closed);
+                        return Some(SctpEvent::Close { id: entry.id });
                     }
                 }
 
