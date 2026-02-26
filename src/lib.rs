@@ -1701,6 +1701,9 @@ impl Rtc {
         self.last_now = now;
         self.ice.handle_timeout(now);
         self.sctp.handle_timeout(now);
+        if !self.sctp.has_pending_stream_closures() {
+            self.chan.clear_closed_stream_ids();
+        }
         self.chan.handle_timeout(now, &mut self.sctp);
         self.session.handle_timeout(now)?;
 

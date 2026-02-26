@@ -152,6 +152,9 @@ impl fmt::Debug for ChannelData {
 pub(crate) struct ChannelHandler {
     allocations: Vec<ChannelAllocation>,
     next_channel_id: usize,
+    /// Stream IDs that were recently closed and should not be reused yet.
+    /// Cleared when there are no pending outgoing RE-CONFIG requests.
+    closed_stream_ids: Vec<u16>,
 }
 
 #[derive(Debug)]
@@ -266,6 +269,7 @@ impl ChannelHandler {
             .allocations
             .iter()
             .filter_map(|a| a.sctp_stream_id)
+            .chain(self.closed_stream_ids.iter().copied())
             .collect();
 
         for a in &mut self.allocations {
@@ -338,7 +342,19 @@ impl ChannelHandler {
         }
     }
 
+    pub fn clear_closed_stream_ids(&mut self) {
+        self.closed_stream_ids.clear();
+    }
+
     pub fn remove_channel(&mut self, id: ChannelId) {
+        if let Some(stream_id) = self
+            .allocations
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.sctp_stream_id)
+        {
+            self.closed_stream_ids.push(stream_id);
+        }
         self.allocations.retain(|a| a.id != id)
     }
 }
@@ -346,6 +362,56 @@ impl ChannelHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_sctp_client() -> RtcSctp {
+        let mut sctp = RtcSctp::new();
+        sctp.init(true, Instant::now());
+        sctp
+    }
+
+    #[test]
+    fn stream_id_not_reused_after_close() {
+        let mut handler = ChannelHandler::default();
+        let mut sctp = make_sctp_client();
+
+        // Allocate two channels (client uses even IDs: 0, 2)
+        let ch0 = handler.new_channel(&Default::default());
+        handler.confirm(ch0, Default::default());
+        let ch1 = handler.new_channel(&Default::default());
+        handler.confirm(ch1, Default::default());
+
+        handler.handle_timeout(Instant::now(), &mut sctp);
+
+        assert_eq!(handler.stream_id_by_channel_id(ch0), Some(0));
+        assert_eq!(handler.stream_id_by_channel_id(ch1), Some(2));
+
+        // Remove channel 0 (stream ID 0 goes into closed_stream_ids)
+        handler.remove_channel(ch0);
+
+        // Allocate a new channel — should skip stream ID 0
+        let ch2 = handler.new_channel(&Default::default());
+        handler.confirm(ch2, Default::default());
+        handler.handle_timeout(Instant::now(), &mut sctp);
+
+        assert_eq!(
+            handler.stream_id_by_channel_id(ch2),
+            Some(4),
+            "new channel must not reuse closed stream ID 0"
+        );
+
+        // After clearing the cooldown, stream ID 0 becomes available again
+        handler.clear_closed_stream_ids();
+
+        let ch3 = handler.new_channel(&Default::default());
+        handler.confirm(ch3, Default::default());
+        handler.handle_timeout(Instant::now(), &mut sctp);
+
+        assert_eq!(
+            handler.stream_id_by_channel_id(ch3),
+            Some(0),
+            "stream ID 0 should be reusable after clearing closed IDs"
+        );
+    }
 
     #[test]
     fn channel_id_allocation() {
