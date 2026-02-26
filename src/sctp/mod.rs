@@ -334,11 +334,6 @@ impl RtcSctp {
         }
     }
 
-    /// Returns true if any streams are in the process of being closed.
-    pub fn has_pending_stream_closures(&self) -> bool {
-        self.entries.iter().any(|e| e.do_close)
-    }
-
     pub fn is_open(&self, id: u16) -> bool {
         if self.state != RtcSctpState::Established {
             return false;

@@ -1,5 +1,6 @@
 //! Data channel related types.
 
+use std::time::Duration;
 use std::{fmt, str, time::Instant};
 
 use crate::sctp::RtcSctp;
@@ -152,9 +153,9 @@ impl fmt::Debug for ChannelData {
 pub(crate) struct ChannelHandler {
     allocations: Vec<ChannelAllocation>,
     next_channel_id: usize,
-    /// Stream IDs that were recently closed and should not be reused yet.
-    /// Cleared when there are no pending outgoing RE-CONFIG requests.
-    closed_stream_ids: Vec<u16>,
+    /// Stream IDs recently closed, with the time they were closed.
+    /// Excluded from allocation until the cooldown expires.
+    closed_stream_ids: Vec<(u16, Instant)>,
 }
 
 #[derive(Debug)]
@@ -269,7 +270,7 @@ impl ChannelHandler {
             .allocations
             .iter()
             .filter_map(|a| a.sctp_stream_id)
-            .chain(self.closed_stream_ids.iter().copied())
+            .chain(self.closed_stream_ids.iter().map(|(id, _)| *id))
             .collect();
 
         for a in &mut self.allocations {
@@ -342,18 +343,23 @@ impl ChannelHandler {
         }
     }
 
-    pub fn clear_closed_stream_ids(&mut self) {
-        self.closed_stream_ids.clear();
+    const STREAM_ID_COOLDOWN: Duration = Duration::from_secs(2);
+
+    /// Remove stream IDs from the cooldown list that have expired.
+    pub fn expire_closed_stream_ids(&mut self, now: Instant) {
+        self.closed_stream_ids.retain(|(_, closed_at)| {
+            now.duration_since(*closed_at) < Self::STREAM_ID_COOLDOWN
+        });
     }
 
-    pub fn remove_channel(&mut self, id: ChannelId) {
+    pub fn remove_channel(&mut self, id: ChannelId, now: Instant) {
         if let Some(stream_id) = self
             .allocations
             .iter()
             .find(|a| a.id == id)
             .and_then(|a| a.sctp_stream_id)
         {
-            self.closed_stream_ids.push(stream_id);
+            self.closed_stream_ids.push((stream_id, now));
         }
         self.allocations.retain(|a| a.id != id)
     }
@@ -370,9 +376,10 @@ mod tests {
     }
 
     #[test]
-    fn stream_id_not_reused_after_close() {
+    fn stream_id_not_reused_during_cooldown() {
         let mut handler = ChannelHandler::default();
         let mut sctp = make_sctp_client();
+        let now = Instant::now();
 
         // Allocate two channels (client uses even IDs: 0, 2)
         let ch0 = handler.new_channel(&Default::default());
@@ -380,18 +387,18 @@ mod tests {
         let ch1 = handler.new_channel(&Default::default());
         handler.confirm(ch1, Default::default());
 
-        handler.handle_timeout(Instant::now(), &mut sctp);
+        handler.handle_timeout(now, &mut sctp);
 
         assert_eq!(handler.stream_id_by_channel_id(ch0), Some(0));
         assert_eq!(handler.stream_id_by_channel_id(ch1), Some(2));
 
-        // Remove channel 0 (stream ID 0 goes into closed_stream_ids)
-        handler.remove_channel(ch0);
+        // Remove channel 0 (stream ID 0 goes into cooldown)
+        handler.remove_channel(ch0, now);
 
         // Allocate a new channel — should skip stream ID 0
         let ch2 = handler.new_channel(&Default::default());
         handler.confirm(ch2, Default::default());
-        handler.handle_timeout(Instant::now(), &mut sctp);
+        handler.handle_timeout(now, &mut sctp);
 
         assert_eq!(
             handler.stream_id_by_channel_id(ch2),
@@ -399,23 +406,39 @@ mod tests {
             "new channel must not reuse closed stream ID 0"
         );
 
-        // After clearing the cooldown, stream ID 0 becomes available again
-        handler.clear_closed_stream_ids();
+        // Expire shortly after — cooldown still active (only 1s elapsed)
+        let after_1s = now + Duration::from_secs(1);
+        handler.expire_closed_stream_ids(after_1s);
 
         let ch3 = handler.new_channel(&Default::default());
         handler.confirm(ch3, Default::default());
-        handler.handle_timeout(Instant::now(), &mut sctp);
+        handler.handle_timeout(after_1s, &mut sctp);
 
         assert_eq!(
             handler.stream_id_by_channel_id(ch3),
+            Some(6),
+            "stream ID 0 still in cooldown after 1s"
+        );
+
+        // Expire after cooldown period — stream ID 0 available again
+        let after_3s = now + Duration::from_secs(3);
+        handler.expire_closed_stream_ids(after_3s);
+
+        let ch4 = handler.new_channel(&Default::default());
+        handler.confirm(ch4, Default::default());
+        handler.handle_timeout(after_3s, &mut sctp);
+
+        assert_eq!(
+            handler.stream_id_by_channel_id(ch4),
             Some(0),
-            "stream ID 0 should be reusable after clearing closed IDs"
+            "stream ID 0 should be reusable after cooldown expires"
         );
     }
 
     #[test]
     fn channel_id_allocation() {
         let mut handler = ChannelHandler::default();
+        let now = Instant::now();
 
         // allocate first channel, get unique id
         assert_eq!(handler.new_channel(&Default::default()), ChannelId(0));
@@ -425,7 +448,7 @@ mod tests {
 
         // free channel 0, allocate two more channels and verify that the
         // new channels have unique IDs.
-        handler.remove_channel(ChannelId(0));
+        handler.remove_channel(ChannelId(0), now);
         assert_eq!(handler.new_channel(&Default::default()), ChannelId(2));
         assert_eq!(handler.new_channel(&Default::default()), ChannelId(3));
     }
