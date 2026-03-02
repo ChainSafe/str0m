@@ -1286,7 +1286,7 @@ checksum = "ef703b7cb59335eae2eb93ceb664c0eb7ea6bf567079d843e09420219668e072"
 [[package]]
 name = "sctp-proto"
 version = "0.5.0"
-source = "git+https://github.com/ChainSafe/sctp-proto.git?rev=7100453256d768a5ef0df2ab1e84d791b00bd1e8#7100453256d768a5ef0df2ab1e84d791b00bd1e8"
+source = "git+https://github.com/ChainSafe/sctp-proto.git?rev=63a08b57c41cd530bb9e9e6e4fca6778d4d6889e#63a08b57c41cd530bb9e9e6e4fca6778d4d6889e"
 dependencies = [
  "bytes",
  "crc",
