@@ -53,7 +53,7 @@ _internal_test_exports = []
 [dependencies]
 tracing = "0.1.37"
 fastrand = "2.0.1"
-sctp-proto = { git = "https://github.com/ChainSafe/sctp-proto.git", rev = "7100453256d768a5ef0df2ab1e84d791b00bd1e8" }
+sctp-proto = { git = "https://github.com/ChainSafe/sctp-proto.git", rev = "63a08b57c41cd530bb9e9e6e4fca6778d4d6889e" }
 combine = "4.6.6"
 
 # aws-lc-rs is used when we are using the dimpl DTLS implementation
