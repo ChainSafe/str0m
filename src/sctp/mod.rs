@@ -507,7 +507,17 @@ impl RtcSctp {
                 return self.poll();
             }
 
-            // TODO: Do we need to handle AssociationLost?
+            if let Event::AssociationLost { reason } = e {
+                warn!("SCTP association lost: {:?}", reason);
+                set_state(&mut self.state, RtcSctpState::Uninited);
+                // Close all non-closed streams so the caller gets Close events.
+                for entry in &mut self.entries {
+                    if entry.state != StreamEntryState::Closed {
+                        entry.do_close = true;
+                    }
+                }
+                return self.poll();
+            }
 
             if let Event::Stream(se) = e {
                 match se {
@@ -550,7 +560,8 @@ impl RtcSctp {
                 match assoc.open_stream(entry.id, PayloadProtocolIdentifier::Unknown) {
                     Ok(mut s) => {
                         if !entry.configure_reliability(&mut s) {
-                            continue;
+                            entry.set_state(StreamEntryState::Closed);
+                            return Some(SctpEvent::Close { id: entry.id });
                         }
 
                         let config = entry.config.as_ref().expect("config if AwaitOpen");
@@ -562,16 +573,23 @@ impl RtcSctp {
                             let n = dcep.marshal_to(&mut buf);
                             buf.truncate(n);
 
-                            let l = s
+                            match s
                                 .write_with_ppi(&buf, PayloadProtocolIdentifier::Dcep)
-                                .expect("writing dcep open");
-                            assert!(n == l);
+                            {
+                                Ok(l) => {
+                                    assert!(n == l);
+                                    entry.set_state(StreamEntryState::AwaitDcepAck);
 
-                            entry.set_state(StreamEntryState::AwaitDcepAck);
-
-                            // Start over with polling, since we might have caused some network traffic by
-                            // writing the DcepOpen.
-                            return self.do_poll();
+                                    // Start over with polling, since we might have caused some network traffic by
+                                    // writing the DcepOpen.
+                                    return self.do_poll();
+                                }
+                                Err(e) => {
+                                    warn!("Writing DCEP open for stream {} failed: {:?}", entry.id, e);
+                                    entry.do_close = true;
+                                    continue;
+                                }
+                            }
                         }
 
                         // Continuing means we are opening the stream out-of-band.
@@ -586,7 +604,8 @@ impl RtcSctp {
                                 entry.id
                             );
                             entry.do_close = true;
-                            continue;
+                            entry.set_state(StreamEntryState::Closed);
+                            return Some(SctpEvent::Close { id: entry.id });
                         }
 
                         // Continuing means we are opening the stream out-of-band. The error can happen
@@ -595,7 +614,8 @@ impl RtcSctp {
                     Err(e) => {
                         warn!("Opening stream {} failed: {:?}", entry.id, e);
                         entry.do_close = true;
-                        continue;
+                        entry.set_state(StreamEntryState::Closed);
+                        return Some(SctpEvent::Close { id: entry.id });
                     }
                 }
 
@@ -681,10 +701,18 @@ impl RtcSctp {
 
                             let mut obuf = [0];
                             DcepAck.marshal_to(&mut obuf);
-                            let l = stream
+                            match stream
                                 .write_with_ppi(&obuf, PayloadProtocolIdentifier::Dcep)
-                                .expect("writing dcep open");
-                            assert!(obuf.len() == l);
+                            {
+                                Ok(l) => {
+                                    assert!(obuf.len() == l);
+                                }
+                                Err(e) => {
+                                    warn!("Writing DCEP ack for stream {} failed: {:?}", entry.id, e);
+                                    entry.do_close = true;
+                                    continue;
+                                }
+                            }
 
                             entry.set_state(StreamEntryState::Open);
 
