@@ -138,7 +138,9 @@ enum StreamEntryState {
     AwaitDcepAck,
     /// Stream is open, ready to send data.
     Open,
-    /// If some error occurs.
+    /// Stream close initiated, waiting for sctp-proto to unregister the stream.
+    Closing,
+    /// Stream fully closed and ready for cleanup.
     Closed,
 }
 
@@ -331,6 +333,14 @@ impl RtcSctp {
     pub fn close_stream(&mut self, id: u16) {
         if let Some(entry) = self.entries.iter_mut().find(|v| v.id == id) {
             entry.do_close = true;
+        }
+        // Initiate RE-CONFIG so the remote peer knows to reset this stream.
+        if let Some(assoc) = &mut self.assoc {
+            if let Ok(mut stream) = assoc.stream(id) {
+                if let Err(e) = stream.stop() {
+                    debug!("Failed to stop stream {}: {:?}", id, e);
+                }
+            }
         }
     }
 
@@ -625,9 +635,22 @@ impl RtcSctp {
                 });
             }
 
-            if entry.do_close && entry.state != StreamEntryState::Closed {
-                entry.set_state(StreamEntryState::Closed);
-                return Some(SctpEvent::Close { id: entry.id });
+            if entry.do_close
+                && entry.state != StreamEntryState::Closed
+                && entry.state != StreamEntryState::Closing
+            {
+                entry.set_state(StreamEntryState::Closing);
+                continue;
+            }
+
+            if entry.state == StreamEntryState::Closing {
+                match assoc.stream(entry.id) {
+                    Ok(_) => continue,
+                    Err(_) => {
+                        entry.set_state(StreamEntryState::Closed);
+                        return Some(SctpEvent::Close { id: entry.id });
+                    }
+                }
             }
 
             let mut stream = match assoc.stream(entry.id) {
