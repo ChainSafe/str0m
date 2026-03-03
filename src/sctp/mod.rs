@@ -646,6 +646,7 @@ impl RtcSctp {
             if entry.state == StreamEntryState::Closing {
                 match assoc.stream(entry.id) {
                     Ok(_) => continue,
+                    Err(ProtoError::ErrStreamResetPending) => continue,
                     Err(_) => {
                         entry.set_state(StreamEntryState::Closed);
                         return Some(SctpEvent::Close { id: entry.id });
