@@ -46,7 +46,7 @@ _internal_test_exports = ["str0m-proto/_internal_test_exports"]
 [dependencies]
 tracing = "0.1.37"
 fastrand = "2.0.1"
-sctp-proto = "0.7.0"
+sctp-proto = { git = "https://github.com/ChainSafe/sctp-proto", rev = "d9b0e567fac7a74e00279526b4781158490585d7" }
 combine = "4.6.6"
 subtle = "2.0.0"
 arrayvec = "0.7.6"
