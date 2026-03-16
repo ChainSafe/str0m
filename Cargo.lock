@@ -1443,8 +1443,8 @@ dependencies = [
 
 [[package]]
 name = "sctp-proto"
-version = "0.7.0"
-source = "git+https://github.com/ChainSafe/sctp-proto?rev=b8be59b4bef1ad55655255109533fa78c873fce4#b8be59b4bef1ad55655255109533fa78c873fce4"
+version = "0.7.1"
+source = "git+https://github.com/ChainSafe/sctp-proto?rev=d9b0e567fac7a74e00279526b4781158490585d7#d9b0e567fac7a74e00279526b4781158490585d7"
 dependencies = [
  "bytes",
  "crc",
